@@ -194,11 +194,8 @@ class Module extends AbstractModule
                     return;
                 }
                 $valueOptions = ['clear' => 'Clear text']; // @translate;
-                $store = $this->getServiceLocator()->get('Omeka\File\Store');
-                if ($store instanceof Local) {
-                    // Files must be stored locally to refresh extracted text.
-                    $valueOptions['refresh'] = 'Refresh text'; // @translate
-                }
+                $valueOptions['refresh'] = 'Refresh text'; // @translate
+
                 $form->add([
                     'name' => 'extract_text_action',
                     'type' => Element\Select::class,
@@ -276,13 +273,10 @@ class Module extends AbstractModule
                 'view.edit.form.after',
                 function (Event $event) {
                     $view = $event->getTarget();
-                    $store = $this->getServiceLocator()->get('Omeka\File\Store');
                     $select = new Element\Select('extract_text_action');
                     $valueOptions = ['clear' => 'Clear text']; // @translate
-                    if ($store instanceof Local) {
-                        $valueOptions['refresh'] = 'Refresh text'; // @translate
-                        $valueOptions['refresh_background'] = 'Refresh text (background)'; // @translate
-                    }
+                    $valueOptions['refresh'] = 'Refresh text'; // @translate
+                    $valueOptions['refresh_background'] = 'Refresh text (background)'; // @translate
                     $select->setLabel('Extract text'); // @translate
                     $select->setValueOptions($valueOptions);
                     $select->setEmptyOption('[No action]'); // @translate
@@ -310,10 +304,10 @@ class Module extends AbstractModule
     {
         $services = $this->getServiceLocator();
         $store = $services->get('Omeka\File\Store');
+        $downloader = $services->get('Omeka\File\Downloader');
         if ('refresh_background' === $action) {
-            // Note that we only dispatch the job when a) not already in the
-            // background and b) when files are stored locally.
-            if (('cli' !== PHP_SAPI) && ($store instanceof Local)) {
+            // Note that we only dispatch the job when not already in the background.
+            if ('cli' !== PHP_SAPI) {
                 $jobDispatcher = $services->get('Omeka\Job\Dispatcher');
                 $jobDispatcher->dispatch('ExtractText\Job\RefreshItemText', [
                     'item_id' => $item->getId(),
@@ -326,10 +320,17 @@ class Module extends AbstractModule
         // Order by position in case the position was changed on this request.
         $criteria = Criteria::create()->orderBy(['position' => Criteria::ASC]);
         foreach ($itemMedia->matching($criteria) as $media) {
-            // Files must be stored locally to refresh extracted text.
-            if (('refresh' === $action) && ($store instanceof Local)) {
-                $filePath = $store->getLocalPath(sprintf('original/%s', $media->getFilename()));
-                $this->setTextToMedia($filePath, $media, $textProperty);
+            if ('refresh' === $action) {
+                if ($store instanceof Local) {
+                    $filePath = $store->getLocalPath(sprintf('original/%s', $media->getFilename()));
+                    $this->setTextToMedia($filePath, $media, $textProperty);
+                } else {
+                    $tempFile = $downloader->download($store->getUri(sprintf('original/%s', $media->getFilename())));
+                    if ($tempFile) {
+                        $this->setTextToMedia($tempFile->getTempPath(), $media, $textProperty);
+                        $tempFile->delete();
+                    }
+                }
             }
             $mediaValues = $media->getValues();
             $criteria = Criteria::create()
@@ -365,10 +366,10 @@ class Module extends AbstractModule
     {
         $services = $this->getServiceLocator();
         $store = $services->get('Omeka\File\Store');
+        $downloader = $services->get('Omeka\File\Downloader');
         if ('refresh_background' === $action) {
-            // Note that we only dispatch the job when a) not already in the
-            // background and b) when files are stored locally.
-            if (('cli' !== PHP_SAPI) && ($store instanceof Local)) {
+            // Note that we only dispatch the job when not already in the background.
+            if ('cli' !== PHP_SAPI) {
                 $jobDispatcher = $services->get('Omeka\Job\Dispatcher');
                 $jobDispatcher->dispatch('ExtractText\Job\RefreshMediaText', [
                     'media_id' => $media->getId(),
@@ -376,9 +377,17 @@ class Module extends AbstractModule
             }
             return;
         }
-        if (('refresh' === $action) && ($store instanceof Local)) {
-            $filePath = $store->getLocalPath(sprintf('original/%s', $media->getFilename()));
-            $this->setTextToMedia($filePath, $media, $textProperty);
+        if ('refresh' === $action) {
+            if ($store instanceof Local) {
+                $filePath = $store->getLocalPath(sprintf('original/%s', $media->getFilename()));
+                $this->setTextToMedia($filePath, $media, $textProperty);
+            } else {
+                $tempFile = $downloader->download($store->getUri(sprintf('original/%s', $media->getFilename())));
+                if ($tempFile) {
+                    $this->setTextToMedia($tempFile->getTempPath(), $media, $textProperty);
+                    $tempFile->delete();
+                }
+            }
         }
         if ('clear' === $action) {
             $mediaValues = $media->getValues();
